@@ -2722,7 +2722,7 @@ function _esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-function confirmAddSession() {
+async function confirmAddSession() {
   _captureIpManualEdits();
   const label = (importLabelEl.value || "").trim() || `S${sessions.length + 1}`;
   const date  = (importDateEl.value  || "").trim();
@@ -2745,7 +2745,24 @@ function confirmAddSession() {
   });
 
   closeAddSessionFlow();
-  buildEditorTable();
+
+  // Build save payload from updated in-memory data and persist to localStorage + Firestore,
+  // then reload so the chart and student blocks reflect the new session.
+  const laps = {};
+  students.forEach(stu => { laps[stu.name] = [...stu.laps]; });
+  const savePayload = {
+    sessions: [...sessions],
+    laps,
+    savedAt: new Date().toISOString(),
+  };
+  try { localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(savePayload)); } catch(e) {}
+  try {
+    await db.doc("dashboard/sessionData").set(savePayload);
+  } catch(e) {
+    alert("Could not save to database: " + (e.message || e));
+    return;
+  }
+  location.reload();
 }
 
 document.getElementById("addSessionClose").addEventListener("click", closeAddSessionFlow);
