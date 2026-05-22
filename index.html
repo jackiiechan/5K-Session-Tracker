@@ -1756,8 +1756,10 @@ function saveNotes() {
 
     if (sesSnap.exists) {
       const data = sesSnap.data();
-      const localRaw = localStorage.getItem("all-around-world-5k:session-data:v2");
-      if (JSON.stringify(data) !== localRaw) {
+      let localData = null;
+      try { localData = JSON.parse(localStorage.getItem("all-around-world-5k:session-data:v2") || "null"); } catch(_) {}
+      // Compare by savedAt timestamp only — avoids false mismatches from key-order differences in JSON.stringify
+      if (!localData || localData.savedAt !== data.savedAt) {
         localStorage.setItem("all-around-world-5k:session-data:v2", JSON.stringify(data));
         // Session/lap changes need a full reload to rebuild the chart.
         location.reload();
@@ -2759,8 +2761,10 @@ document.addEventListener("keydown", (e) => {
 // Safe to leave in — it only runs if the notes doc is missing.
 (async function seedNotes() {
   try {
-    // Always write seed — safe because it only runs once per deploy then gets
-    // overwritten by real coach edits via saveNotes().
+    // Only seed if notes don't already exist in Firestore.
+    // This prevents overwriting custom coach notes on every page load.
+    const existing = await db.doc("dashboard/notes").get();
+    if (existing.exists) return;
     const seed = {
       "Ari": "Strong runner. Race ready. The fitness is there, just need to stay focused during the run especially with a lot of stimulation and noise on the public course. Prioritize no injuries leading up to race date.",
       "Nayel": "Strong runner. Race ready. The fitness is there, just need to stay focused during the run especially with a lot of stimulation and noise on the public course. Prioritize no injuries leading up to race date.",
