@@ -1636,7 +1636,7 @@
   <div class="wrap">
     <div class="foot-row">
       <div>All Around the World 5K · Alpha School, Lake Forest CA</div>
-      <div>Report updated May 20, 2026</div>
+      <div>Report updated <span id="reportDate"></span></div>
     </div>
     <div class="note">
       T2P (Test to Pass) = completing the 5K within the grade-level time standard.
@@ -1844,6 +1844,7 @@ const totalLaps = students.reduce(
 );
 document.getElementById("daysToRace").textContent = daysToRace();
 document.getElementById("totalMiles").textContent = (totalLaps * 0.2).toFixed(1) + " mi";
+document.getElementById("reportDate").textContent = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
 
 /* ====================== CHART ====================== */
 const xLabels = sessions.map(s => `${s.label} ${s.date}`);
