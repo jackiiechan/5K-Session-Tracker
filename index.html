@@ -1711,6 +1711,9 @@ let notes = {};
 try { Object.assign(tierOverrides, JSON.parse(localStorage.getItem("aw5k-tier-overrides-v1")) || {}); } catch(_) {}
 try { Object.assign(notes,         JSON.parse(localStorage.getItem("aw5k-coach-notes-v1"))     || {}); } catch(_) {}
 
+// Apply any saved tier overrides to the students array immediately.
+students.forEach(s => { if (tierOverrides[s.name]) s.tier = tierOverrides[s.name]; });
+
 function saveTierOverrides() {
   try { localStorage.setItem("aw5k-tier-overrides-v1", JSON.stringify(tierOverrides)); } catch (e) {}
   db.doc("dashboard/overrides").set(tierOverrides).catch(e => console.warn("Firestore write:", e));
@@ -2486,7 +2489,7 @@ function removeEditorSession() {
   students.forEach(s => s.laps.pop());
   buildEditorTable();
 }
-function saveEditor() {
+async function saveEditor() {
   // Read session labels/dates from inputs.
   const labelEls = document.querySelectorAll(".ses-label");
   const dateEls  = document.querySelectorAll(".ses-date");
