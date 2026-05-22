@@ -170,14 +170,6 @@
     padding: 40px 0;
     border-bottom: 1px solid var(--line);
   }
-  #fb-loading {
-    position: fixed; inset: 0; background: rgba(255,255,255,0.85);
-    display: flex; align-items: center; justify-content: center;
-    font: 14px/1 -apple-system, BlinkMacSystemFont, sans-serif;
-    color: #6B7280; z-index: 99999; letter-spacing: 0.01em;
-  }
-  #fb-loading.hidden { display: none; }
-
   section.last { border-bottom: 0; }
 
   .section-head {
@@ -1654,8 +1646,6 @@
   </div>
 </footer>
 
-<div id="fb-loading">Loading dashboard…</div>
-
 <script>
 /* ====================== FIREBASE ====================== */
 const firebaseConfig = {
@@ -1714,68 +1704,68 @@ students.forEach(s => {
   s._autoTier = s.tier;
 });
 
-// Tier overrides and notes — loaded from Firestore on init, applied before render.
+// Tier overrides and notes.
+// Load from localStorage immediately (instant), then sync from Firestore in background.
 let tierOverrides = {};
 let notes = {};
+try { Object.assign(tierOverrides, JSON.parse(localStorage.getItem("aw5k-tier-overrides-v1")) || {}); } catch(_) {}
+try { Object.assign(notes,         JSON.parse(localStorage.getItem("aw5k-coach-notes-v1"))     || {}); } catch(_) {}
 
-// Also mirror to localStorage as a local cache for instant re-renders.
 function saveTierOverrides() {
   try { localStorage.setItem("aw5k-tier-overrides-v1", JSON.stringify(tierOverrides)); } catch (e) {}
-  if (db) db.doc("dashboard/overrides").set(tierOverrides).catch(e => console.warn("Firestore write:", e));
+  db.doc("dashboard/overrides").set(tierOverrides).catch(e => console.warn("Firestore write:", e));
 }
 function saveNotes() {
   try { localStorage.setItem("aw5k-coach-notes-v1", JSON.stringify(notes)); } catch (e) {}
-  if (db) db.doc("dashboard/notes").set(notes).catch(e => console.warn("Firestore write:", e));
+  db.doc("dashboard/notes").set(notes).catch(e => console.warn("Firestore write:", e));
 }
 
-// Async init: load overrides + notes from Firestore, apply, then render.
-(async function firebaseInit() {
-  const loader = document.getElementById("fb-loading");
+// Background sync from Firestore — updates the page silently if data has changed.
+(async function firebaseSync() {
   try {
     const [ovSnap, notesSnap, sesSnap] = await Promise.all([
       db.doc("dashboard/overrides").get(),
       db.doc("dashboard/notes").get(),
       db.doc("dashboard/sessionData").get(),
     ]);
-    if (ovSnap.exists) Object.assign(tierOverrides, ovSnap.data());
-    if (notesSnap.exists) Object.assign(notes, notesSnap.data());
+    let needsRerender = false;
 
-    // Apply session data if coach has edited laps.
-    if (sesSnap.exists) {
-      const data = sesSnap.data();
-      if (Array.isArray(data.sessions) && data.sessions.length) {
-        sessions.length = 0;
-        data.sessions.forEach(s => sessions.push(s));
-      }
-      if (data.laps && typeof data.laps === "object") {
-        const n = sessions.length;
-        students.forEach(stu => {
-          const saved = data.laps[stu.name];
-          if (Array.isArray(saved)) {
-            const arr = saved.slice(0, n);
-            while (arr.length < n) arr.push(null);
-            stu.laps = arr;
-          }
+    if (ovSnap.exists) {
+      const remote = ovSnap.data();
+      if (JSON.stringify(remote) !== JSON.stringify(tierOverrides)) {
+        Object.keys(tierOverrides).forEach(k => delete tierOverrides[k]);
+        Object.assign(tierOverrides, remote);
+        students.forEach(s => {
+          s.tier = tierOverrides[s.name] || s._autoTier;
         });
+        needsRerender = true;
       }
     }
+
+    if (notesSnap.exists) {
+      const remote = notesSnap.data();
+      if (JSON.stringify(remote) !== JSON.stringify(notes)) {
+        Object.keys(notes).forEach(k => delete notes[k]);
+        Object.assign(notes, remote);
+        needsRerender = true;
+      }
+    }
+
+    if (sesSnap.exists) {
+      const data = sesSnap.data();
+      const localRaw = localStorage.getItem("all-around-world-5k:session-data:v2");
+      if (JSON.stringify(data) !== localRaw) {
+        localStorage.setItem("all-around-world-5k:session-data:v2", JSON.stringify(data));
+        // Session/lap changes need a full reload to rebuild the chart.
+        location.reload();
+        return;
+      }
+    }
+
+    if (needsRerender) renderAll();
   } catch (e) {
-    console.warn("Firestore load failed, using local cache:", e);
-    // Fall back to localStorage cache.
-    try { Object.assign(tierOverrides, JSON.parse(localStorage.getItem("aw5k-tier-overrides-v1")) || {}); } catch(_) {}
-    try { Object.assign(notes, JSON.parse(localStorage.getItem("aw5k-coach-notes-v1")) || {}); } catch(_) {}
-    try {
-      const raw = localStorage.getItem("all-around-world-5k:session-data:v2");
-      if (raw) { const d = JSON.parse(raw); if (Array.isArray(d.sessions)) { sessions.length=0; d.sessions.forEach(s=>sessions.push(s)); } }
-    } catch(_) {}
+    console.warn("Firestore sync:", e);
   }
-
-  // Apply tier overrides to students.
-  students.forEach(s => { if (tierOverrides[s.name]) s.tier = tierOverrides[s.name]; });
-
-  // Hide loader and trigger full render.
-  if (loader) loader.classList.add("hidden");
-  renderAll();
 })();
 function renderCardNote(name) {
   const slot = document.querySelector(`[data-note-slot="${CSS.escape(name)}"]`);
@@ -2116,13 +2106,12 @@ function renderCards() {
   students.forEach(s => renderCardNote(s.name));
 }
 
-/* renderAll() is called by firebaseInit() after Firestore data is loaded */
 function renderAll() {
-  // Recalculate hero stats with potentially updated laps.
   const totalLapsNow = students.reduce((sum, s) => sum + s.laps.reduce((a,b) => a + (b||0), 0), 0);
   document.getElementById("totalMiles").textContent = (totalLapsNow * 0.2).toFixed(1) + " mi";
   renderCards();
 }
+renderAll(); // Initial render using localStorage / hardcoded data.
 
 /* ====================== HIGHLIGHT SYNC ====================== */
 function highlight(name, on) {
