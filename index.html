@@ -27,6 +27,9 @@
 </template>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <style>
   :root {
     --bg: #FFFFFF;
@@ -167,6 +170,14 @@
     padding: 40px 0;
     border-bottom: 1px solid var(--line);
   }
+  #fb-loading {
+    position: fixed; inset: 0; background: rgba(255,255,255,0.85);
+    display: flex; align-items: center; justify-content: center;
+    font: 14px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+    color: #6B7280; z-index: 99999; letter-spacing: 0.01em;
+  }
+  #fb-loading.hidden { display: none; }
+
   section.last { border-bottom: 0; }
 
   .section-head {
@@ -1643,7 +1654,25 @@
   </div>
 </footer>
 
+<div id="fb-loading">Loading dashboard…</div>
+
 <script>
+/* ====================== FIREBASE ====================== */
+const firebaseConfig = {
+  apiKey: "AIzaSyDmsqUtOoM-3PM_ZzLioJJcg9mg7If6_pQ",
+  authDomain: "k-session-tracker.firebaseapp.com",
+  databaseURL: "https://k-session-tracker-default-rtdb.firebaseio.com",
+  projectId: "k-session-tracker",
+  storageBucket: "k-session-tracker.firebasestorage.app",
+  messagingSenderId: "478687066425",
+  appId: "1:478687066425:web:449f3fd81d2f430875d0e8"
+};
+firebase.initializeApp(firebaseConfig);
+const db   = firebase.firestore();
+const auth = firebase.auth();
+const COACH_EMAIL = "jackiechan.cal@gmail.com";
+let isCoach = false;
+
 /* ====================== DATA ====================== */
 const students = [
   { name: "Ari",       tier: "Race-Ready",    level: "L2", laps: [13,12,12,13,12,13,13,11,10,12,14] },
@@ -1685,24 +1714,69 @@ students.forEach(s => {
   s._autoTier = s.tier;
 });
 
-// Manual tier overrides set by the coach (persisted in browser).
-const OVERRIDES_KEY = "aw5k-tier-overrides-v1";
+// Tier overrides and notes — loaded from Firestore on init, applied before render.
 let tierOverrides = {};
-try { tierOverrides = JSON.parse(localStorage.getItem(OVERRIDES_KEY)) || {}; } catch (e) { tierOverrides = {}; }
-students.forEach(s => {
-  if (tierOverrides[s.name]) s.tier = tierOverrides[s.name];
-});
+let notes = {};
+
+// Also mirror to localStorage as a local cache for instant re-renders.
 function saveTierOverrides() {
-  try { localStorage.setItem(OVERRIDES_KEY, JSON.stringify(tierOverrides)); } catch (e) {}
+  try { localStorage.setItem("aw5k-tier-overrides-v1", JSON.stringify(tierOverrides)); } catch (e) {}
+  if (db) db.doc("dashboard/overrides").set(tierOverrides).catch(e => console.warn("Firestore write:", e));
+}
+function saveNotes() {
+  try { localStorage.setItem("aw5k-coach-notes-v1", JSON.stringify(notes)); } catch (e) {}
+  if (db) db.doc("dashboard/notes").set(notes).catch(e => console.warn("Firestore write:", e));
 }
 
-// Coach notes (also persisted in browser, loaded early so cards can render previews).
-const NOTES_KEY = "aw5k-coach-notes-v1";
-let notes = {};
-try { notes = JSON.parse(localStorage.getItem(NOTES_KEY)) || {}; } catch (e) { notes = {}; }
-function saveNotes() {
-  try { localStorage.setItem(NOTES_KEY, JSON.stringify(notes)); } catch (e) {}
-}
+// Async init: load overrides + notes from Firestore, apply, then render.
+(async function firebaseInit() {
+  const loader = document.getElementById("fb-loading");
+  try {
+    const [ovSnap, notesSnap, sesSnap] = await Promise.all([
+      db.doc("dashboard/overrides").get(),
+      db.doc("dashboard/notes").get(),
+      db.doc("dashboard/sessionData").get(),
+    ]);
+    if (ovSnap.exists) Object.assign(tierOverrides, ovSnap.data());
+    if (notesSnap.exists) Object.assign(notes, notesSnap.data());
+
+    // Apply session data if coach has edited laps.
+    if (sesSnap.exists) {
+      const data = sesSnap.data();
+      if (Array.isArray(data.sessions) && data.sessions.length) {
+        sessions.length = 0;
+        data.sessions.forEach(s => sessions.push(s));
+      }
+      if (data.laps && typeof data.laps === "object") {
+        const n = sessions.length;
+        students.forEach(stu => {
+          const saved = data.laps[stu.name];
+          if (Array.isArray(saved)) {
+            const arr = saved.slice(0, n);
+            while (arr.length < n) arr.push(null);
+            stu.laps = arr;
+          }
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("Firestore load failed, using local cache:", e);
+    // Fall back to localStorage cache.
+    try { Object.assign(tierOverrides, JSON.parse(localStorage.getItem("aw5k-tier-overrides-v1")) || {}); } catch(_) {}
+    try { Object.assign(notes, JSON.parse(localStorage.getItem("aw5k-coach-notes-v1")) || {}); } catch(_) {}
+    try {
+      const raw = localStorage.getItem("all-around-world-5k:session-data:v2");
+      if (raw) { const d = JSON.parse(raw); if (Array.isArray(d.sessions)) { sessions.length=0; d.sessions.forEach(s=>sessions.push(s)); } }
+    } catch(_) {}
+  }
+
+  // Apply tier overrides to students.
+  students.forEach(s => { if (tierOverrides[s.name]) s.tier = tierOverrides[s.name]; });
+
+  // Hide loader and trigger full render.
+  if (loader) loader.classList.add("hidden");
+  renderAll();
+})();
 function renderCardNote(name) {
   const slot = document.querySelector(`[data-note-slot="${CSS.escape(name)}"]`);
   if (!slot) return;
@@ -1733,38 +1807,9 @@ const sessions = [
 ];
 
 /* ====================== SAVED-DATA OVERRIDE ====================== */
-/* If the coach has edited session data via the Editor, load it before
-   anything else uses `sessions` / `students.laps`. */
+/* Session data is loaded from Firestore in firebaseInit() above.
+   SESSION_STORAGE_KEY kept for localStorage fallback only. */
 const SESSION_STORAGE_KEY = "all-around-world-5k:session-data:v2";
-(function loadSavedSessionData() {
-  try {
-    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
-    if (!raw) return;
-    const data = JSON.parse(raw);
-    if (Array.isArray(data.sessions) && data.sessions.length) {
-      sessions.length = 0;
-      data.sessions.forEach(s => sessions.push(s));
-    }
-    if (data.laps && typeof data.laps === "object") {
-      const n = sessions.length;
-      students.forEach(stu => {
-        const saved = data.laps[stu.name];
-        if (Array.isArray(saved)) {
-          // Pad or trim to match current session count.
-          const arr = saved.slice(0, n);
-          while (arr.length < n) arr.push(null);
-          stu.laps = arr;
-        } else {
-          // Student not in saved data (e.g. roster grew). Pad existing laps.
-          while (stu.laps.length < n) stu.laps.push(null);
-          if (stu.laps.length > n) stu.laps = stu.laps.slice(0, n);
-        }
-      });
-    }
-  } catch (e) {
-    console.warn("Could not load saved session data:", e);
-  }
-})();
 
 const TIER_COLOR = {
   "Race-Ready":    "#16A34A",
@@ -2071,7 +2116,13 @@ function renderCards() {
   students.forEach(s => renderCardNote(s.name));
 }
 
-renderCards();
+/* renderAll() is called by firebaseInit() after Firestore data is loaded */
+function renderAll() {
+  // Recalculate hero stats with potentially updated laps.
+  const totalLapsNow = students.reduce((sum, s) => sum + s.laps.reduce((a,b) => a + (b||0), 0), 0);
+  document.getElementById("totalMiles").textContent = (totalLapsNow * 0.2).toFixed(1) + " mi";
+  renderCards();
+}
 
 /* ====================== HIGHLIGHT SYNC ====================== */
 function highlight(name, on) {
@@ -2342,13 +2393,22 @@ document.addEventListener("keydown", (e) => {
 })();
 
 /* ====================== ADMIN: PASSWORD GATE + EDITOR ====================== */
-const ADMIN_PASSWORD = "066";
 const adminAuthModal  = document.getElementById("adminAuthModal");
 const adminEditModal  = document.getElementById("adminEditModal");
 const adminAuthInput  = document.getElementById("adminAuthInput");
 const adminAuthError  = document.getElementById("adminAuthError");
 
+// Auth state: show/hide coach controls.
+auth.onAuthStateChanged(user => {
+  isCoach = !!user;
+  const adminBtn = document.getElementById("adminBtn");
+  if (adminBtn) adminBtn.title = isCoach ? "Coach access (signed in)" : "Coach access";
+  // If already in editor, refresh it.
+  if (isCoach && !adminEditModal.hidden) buildEditorTable();
+});
+
 function openAdminAuth() {
+  if (isCoach) { openAdminEditor(); return; }
   adminAuthError.textContent = "";
   adminAuthInput.value = "";
   adminAuthModal.hidden = false;
@@ -2357,12 +2417,15 @@ function openAdminAuth() {
 function closeAdminAuth() {
   adminAuthModal.hidden = true;
 }
-function submitAdminAuth() {
-  const v = (adminAuthInput.value || "").trim();
-  if (v === ADMIN_PASSWORD) {
+async function submitAdminAuth() {
+  const password = (adminAuthInput.value || "").trim();
+  if (!password) { adminAuthError.textContent = "Enter your password."; return; }
+  adminAuthError.textContent = "Signing in…";
+  try {
+    await auth.signInWithEmailAndPassword(COACH_EMAIL, password);
     closeAdminAuth();
     openAdminEditor();
-  } else {
+  } catch (e) {
     adminAuthError.textContent = "Incorrect password. Try again.";
     adminAuthInput.select();
   }
@@ -2464,14 +2527,18 @@ function saveEditor() {
     newLaps[stu.name] = arr;
   });
 
+  const savePayload = {
+    sessions: newSessions,
+    laps: newLaps,
+    savedAt: new Date().toISOString(),
+  };
   try {
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
-      sessions: newSessions,
-      laps: newLaps,
-      savedAt: new Date().toISOString(),
-    }));
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(savePayload));
+  } catch (e) { /* ignore local cache failure */ }
+  try {
+    await db.doc("dashboard/sessionData").set(savePayload);
   } catch (e) {
-    alert("Could not save: " + (e.message || e));
+    alert("Could not save to database: " + (e.message || e));
     return;
   }
   location.reload();
@@ -2479,6 +2546,7 @@ function saveEditor() {
 function resetEditorData() {
   if (!confirm("Reset all session data and lap counts to the defaults? This cannot be undone.")) return;
   localStorage.removeItem(SESSION_STORAGE_KEY);
+  db.doc("dashboard/sessionData").delete().catch(() => {});
   location.reload();
 }
 
