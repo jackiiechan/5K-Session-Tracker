@@ -1295,7 +1295,7 @@
     <div class="section-head">
       <div>
         <h2>Session-by-Session Lap Counts</h2>
-        <div class="sh-sub" id="chartSubtitle">S1 (Mar 24) → S11 (May 13) · 1 lap = 0.2 miles</div>
+        <div class="sh-sub" id="chartSubtitle">S1 (Mar 24) → S11 (May 13)</div>
       </div>
       <div class="legend">
         <span class="item"><span class="swatch" style="background:#16A34A"></span>Race-Ready</span>
@@ -2400,7 +2400,7 @@ document.addEventListener("keydown", (e) => {
     const range = first === last
       ? `${first.label} (${first.date})`
       : `${first.label} (${first.date}) → ${last.label} (${last.date})`;
-    sub.textContent = `${range} · 1 lap = 0.2 miles`;
+    sub.textContent = range;
   }
 })();
 
